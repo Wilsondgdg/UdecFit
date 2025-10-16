@@ -66,6 +66,11 @@ export default function CuentaScreen() {
         <Text style={styles.editButtonText}>Editar perfil</Text>
       </TouchableOpacity>
 
+      <TouchableOpacity style={styles.premiumButton}>
+        <Ionicons name="star-outline" size={20} color="#fff" />
+        <Text style={styles.premiumButtonText}>Hacerse Premium</Text>
+      </TouchableOpacity>
+
       <View style={styles.logout}>
         <Button title="Cerrar sesión" color="#FF4B4B" onPress={cerrarSesion} />
       </View>
@@ -96,6 +101,23 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 30,
   },
+
+  premiumButton: {
+    backgroundColor: '#FFD700',
+    padding: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  premiumButtonText: {
+    color: '#000',
+    marginLeft: 8,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+
   editButtonText: { color: '#fff', marginLeft: 8, fontSize: 16, fontWeight: '600' },
 
   logout: { marginTop: 'auto' },

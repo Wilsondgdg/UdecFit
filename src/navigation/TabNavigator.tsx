@@ -3,7 +3,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import RutinaScreen from '../screens/RutinaScreen';
 import ProgresoScreen from '../screens/ProgresoScreen';
 import CuentaScreen from '../screens/CuentaScreen';
-import PremiumScreen from '../screens/PremiumScreen';
+import BibliotecaScreen from '../screens/BibliotecaScreen'; 
+
 import { Ionicons } from '@expo/vector-icons';
 
 
@@ -23,6 +24,7 @@ export default function TabNavigator() {
           else if (route.name === 'Progreso') iconName = focused ? 'stats-chart' : 'stats-chart-outline';
           else if (route.name === 'Cuenta') iconName = focused ? 'person' : 'person-outline';
           else if (route.name === 'Biblioteca') iconName = focused ? 'star' : 'star-outline';
+          else if (route.name === 'Biblioteca') iconName = focused ? 'book' : 'book-outline';
 
           return <Ionicons name={iconName} size={size} color={color} />;
         },
@@ -30,8 +32,9 @@ export default function TabNavigator() {
     >
       <Tab.Screen name="Rutina" component={RutinaScreen} />
       <Tab.Screen name="Progreso" component={ProgresoScreen} />
-      <Tab.Screen name="Biblioteca" component={PremiumScreen} />
+
       <Tab.Screen name="Cuenta" component={CuentaScreen} />
+      <Tab.Screen name="Biblioteca" component={BibliotecaScreen} />
     </Tab.Navigator>
   );
 }
