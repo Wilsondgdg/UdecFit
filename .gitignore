@@ -3,6 +3,11 @@
 # dependencies
 node_modules/
 
+# Evitar claves sensibles
+serviceAccountKey.json
+serviceAccountKey.json.json
+
+
 # Expo
 .expo/
 dist/
