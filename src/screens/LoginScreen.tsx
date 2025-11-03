@@ -1,23 +1,37 @@
 import React, { useState } from 'react';
-import { View, TextInput, Button, StyleSheet, Text, Alert } from 'react-native';
+import { View, TextInput, Button, StyleSheet, Text } from 'react-native';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebase/config';
-import { db } from '../firebase/config';             
-import { doc, getDoc } from 'firebase/firestore';
-
+import { auth, db } from '../firebase/config';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 export default function LoginScreen({ navigation }: any) { 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
   const handleLogin = async () => {
+    setErrorMsg('');
+
+    if (!email || !password) {
+      setErrorMsg('Por favor ingresa correo y contraseña.');
+      return;
+    }
+
+    const emailKey = email.toLowerCase().trim();
+    const loginDocRef = doc(db, "loginAttempts", emailKey);
+    const loginDocSnap = await getDoc(loginDocRef);
+    const now = Date.now();
+
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      // 🔹 Intentar iniciar sesión primero (aunque esté bloqueado)
+      const userCredential = await signInWithEmailAndPassword(auth, emailKey, password);
       const user = userCredential.user;
-  
-      // Leer rol desde Firestore
+
+      // 🔹 Si logra autenticarse, reiniciamos el contador
+      await setDoc(loginDocRef, { attempts: 0, blockedUntil: 0 });
+
+      // 🔹 Consultar el rol y navegar
       const userDoc = await getDoc(doc(db, "users", user.uid));
-  
       if (userDoc.exists()) {
         const rol = userDoc.data().rol;
         if (rol === "admin") {
@@ -26,17 +40,47 @@ export default function LoginScreen({ navigation }: any) {
           navigation.replace('Inicio');
         }
       } else {
-        Alert.alert("Error", "No se encontró el perfil del usuario.");
+        setErrorMsg("No se encontró el perfil del usuario.");
       }
+
     } catch (error: any) {
-      Alert.alert('Error 555', 'credenciales invalidas o cuenta inexistente ');
+      console.log("Error de login:", error.message);
+
+      // 🔹 Solo se ejecuta si las credenciales son inválidas
+      const data = loginDocSnap.exists() ? loginDocSnap.data() : {};
+      const { blockedUntil = 0 } = data;
+
+      // Verificar si sigue bloqueado
+      if (blockedUntil && now < blockedUntil) {
+        const remaining = Math.ceil((blockedUntil - now) / 60000);
+        setErrorMsg(`Has superado los intentos. Intenta nuevamente en ${remaining} min.`);
+        return;
+      }
+
+      // Contar intento fallido
+      const attempts = (data.attempts || 0) + 1;
+
+      if (attempts >= 3) {
+        const newBlockedUntil = now + 180 * 1000; // Bloquear por 180 segundos (3 minutos)
+        await setDoc(loginDocRef, {
+          attempts: 3,
+          blockedUntil: newBlockedUntil,
+        });
+        setErrorMsg("Has excedido los 3 intentos. Intenta de nuevo en 180 segundos.");
+      } else {
+        await setDoc(loginDocRef, {
+          attempts,
+          blockedUntil: 0,
+        });
+        setErrorMsg("Usuario y/o contraseña inválidos.");
+      }
     }
   };
-  
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Iniciar Sesión</Text>
+
       <TextInput
         style={styles.input}
         placeholder="Correo electrónico"
@@ -51,7 +95,11 @@ export default function LoginScreen({ navigation }: any) {
         onChangeText={setPassword}
         secureTextEntry
       />
+
       <Button title="Iniciar Sesión" onPress={handleLogin} />
+
+      {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
+
       <Text style={styles.link} onPress={() => navigation.navigate('Registro')}>
         ¿No tienes cuenta? Regístrate
       </Text>
@@ -81,9 +129,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     backgroundColor: '#fff',
   },
+  errorText: {
+    color: 'red',
+    textAlign: 'center',
+    marginTop: 10,
+    fontSize: 14,
+  },
   link: {
     marginTop: 20,
     color: 'blue',
     textAlign: 'center',
-  }
+  },
 });

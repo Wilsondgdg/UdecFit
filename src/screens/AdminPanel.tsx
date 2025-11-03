@@ -70,9 +70,9 @@ export default function AdminPanel({ navigation }: any) {
 
   const eliminarMaquina = async (id: string) => {
     try {
-        await deleteDoc(doc(db, "maquinas", id));
+      await deleteDoc(doc(db, "maquinas", id));
     } catch (error) {
-        Alert.alert("Error", "No se pudo eliminar la máquina.");
+      Alert.alert("Error", "No se pudo eliminar la máquina.");
     }
   };
 
@@ -81,88 +81,121 @@ export default function AdminPanel({ navigation }: any) {
       const nuevoEstado = estadoActual === "activa" ? "mantenimiento" : "activa";
       await updateDoc(doc(db, "maquinas", id), { estado: nuevoEstado });
     } catch (error) {
-        Alert.alert("Error", "No se pudo actualizar el estado de la máquina.");
+      Alert.alert("Error", "No se pudo actualizar el estado de la máquina.");
     }
   };
 
   const cerrarSesion = async () => {
     try {
-        await signOut(auth);
-        navigation.replace('Login');
+      await signOut(auth);
+      navigation.replace('Login');
     } catch (error) {
-        Alert.alert("Error", "No se pudo cerrar la sesión.");
+      Alert.alert("Error", "No se pudo cerrar la sesión.");
     }
   };
 
   // --- Lógica de Copias de Seguridad (Funciones) ---
 
-  const handleBackup = async () => {
-    Alert.alert(
-      "Confirmar Copia de Seguridad",
-      "¿Estás seguro de que deseas crear una copia de seguridad de la base de datos?",
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Crear Copia",
-          onPress: async () => {
-            try {
-              setLoading(true);
-              const response = await fetch(
-                "https://us-central1-udecfit-b6d1f.cloudfunctions.net/crearBackup"
-              );
-              if (response.ok) {
-                Alert.alert("✅ Copia creada", "La copia de seguridad se generó correctamente en Firebase Storage.");
-              } else {
-                Alert.alert("❌ Error", "No se pudo crear la copia. Revisa los permisos o la conexión.");
-              }
-            } catch (error) {
-              Alert.alert("⚠️ Error de conexión", (error as Error).message);
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
-  };
+  // --- Backup (crear) ---
+const handleBackup = async () => {
+  Alert.alert(
+    "Confirmar Copia de Seguridad",
+    "¿Estás seguro de que deseas crear una copia de seguridad de la base de datos?",
+    [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Crear Copia",
+        onPress: async () => {
+          try {
+            setLoading(true);
 
-  const handleRestore = async () => {
-    Alert.prompt(
-      "Restaurar copia",
-      "Introduce el nombre de la carpeta del backup que deseas restaurar (Ej: 2023-10-26T14-30-00):",
-      [
-        {
-          text: "Cancelar",
-          style: "cancel",
-        },
-        {
-          text: "Restaurar",
-          onPress: async (folderName) => {
-            if (!folderName || folderName.trim() === "") {
-                Alert.alert("Aviso", "Debes ingresar el nombre de la carpeta.");
-                return;
-            }
-            try {
-              setLoading(true);
-              const response = await fetch(
-                `https://us-central1-udecfit-b6d1f.cloudfunctions.net/restaurarBackup?carpeta=${folderName.trim()}`
-              );
-              if (response.ok) {
-                Alert.alert("✅ Restauración completa", "Los datos fueron restaurados exitosamente.");
-              } else {
-                Alert.alert("❌ Error", "No se pudo restaurar el backup. Verifica el nombre o permisos.");
+            // token para autorizar si tu función lo requiere
+            const token = await auth.currentUser?.getIdToken();
+
+            const response = await fetch(
+              "https://us-central1-udecfit-b6d1f.cloudfunctions.net/crearBackup",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                body: JSON.stringify({}), // enviar algo si tu función lo necesita
               }
-            } catch (error) {
-              Alert.alert("⚠️ Error de conexión", (error as Error).message);
-            } finally {
-              setLoading(false);
+            );
+
+            if (response.ok) {
+              const json = await response.json().catch(() => null);
+              Alert.alert("✅ Copia creada", `Backup iniciado.${json?.folder ? ` Carpeta: ${json.folder}` : ""}`);
+            } else {
+              const text = await response.text().catch(() => null);
+              Alert.alert("❌ Error", `No se pudo crear la copia. ${response.status} ${text ?? ""}`);
             }
-          },
+          } catch (error) {
+            Alert.alert("⚠️ Error de conexión", (error as Error).message);
+          } finally {
+            setLoading(false);
+          }
         },
-      ],
-      "plain-text"
-    );
-  };
+      },
+    ]
+  );
+};
+
+// --- Restore (restaurar) ---
+const handleRestore = async () => {
+  // Usamos Alert.prompt como antes — recuerda: Alert.prompt NO funciona en Android por defecto.
+  Alert.prompt(
+    "Restaurar copia",
+    "Introduce el nombre de la carpeta del backup que deseas restaurar (Ej: 2025-10-09T05-38-40_67699):",
+    [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Restaurar",
+        onPress: async (folderName) => {
+          if (!folderName || folderName.trim() === "") {
+            Alert.alert("Aviso", "Debes ingresar el nombre de la carpeta.");
+            return;
+          }
+          try {
+            setLoading(true);
+
+            // token para autorizar la petición si tu función lo requiere
+            const token = await auth.currentUser?.getIdToken();
+
+            // Si tu función acepta query param:
+            // const url = `https://us-central1-udecfit-b6d1f.cloudfunctions.net/restaurarBackup?carpeta=${encodeURIComponent(folderName.trim())}`;
+
+            // Recomiendo enviar por POST en body (más claro, y evita problemas de longitud/encoding)
+            const url = `https://us-central1-udecfit-b6d1f.cloudfunctions.net/restaurarBackup`;
+
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify({ carpeta: folderName.trim() }),
+            });
+
+            if (response.ok) {
+              const json = await response.json().catch(() => null);
+              Alert.alert("✅ Restauración iniciada", `${json?.message ?? "Se inició la restauración."}`);
+            } else {
+              const text = await response.text().catch(() => null);
+              Alert.alert("❌ Error", `No se pudo restaurar el backup. ${response.status} ${text ?? ""}`);
+            }
+          } catch (error) {
+            Alert.alert("⚠️ Error de conexión", (error as Error).message);
+          } finally {
+            setLoading(false);
+          }
+        },
+      },
+    ],
+    "plain-text"
+  );
+};
 
   // --- Renderizado ---
 
@@ -227,7 +260,7 @@ export default function AdminPanel({ navigation }: any) {
           </View>
         )}
       </View>
-      
+
       <View style={styles.separator} />
 
       {/* Sección de Cerrar Sesión */}

@@ -1,141 +1,125 @@
-// functions/index.js
-const functions = require('firebase-functions');
-const admin = require('firebase-admin');
-const { google } = require('googleapis');
-const { Storage } = require('@google-cloud/storage');
+const functions = require("firebase-functions");
+const path = require("path");
+const { Storage } = require("@google-cloud/storage");
+let admin;
 
-admin.initializeApp();
-
-const projectId =
-  process.env.GCP_PROJECT ||
-  process.env.GCLOUD_PROJECT ||
-  process.env.FUNCTIONS_EMULATOR_PROJECT_ID;
-
-const bucketName = 'udecfit-firestore-backups';
-const storage = new Storage();
-
-async function getFirestoreClient() {
-  const client = await google.auth.getClient({
-    scopes: [
-      'https://www.googleapis.com/auth/datastore',
-      'https://www.googleapis.com/auth/cloud-platform',
-    ],
-  });
-  return google.firestore({ version: 'v1', auth: client });
+// 🔹 Detectar entorno
+if (process.env.FUNCTIONS_EMULATOR || process.env.GCLOUD_PROJECT === undefined) {
+  admin = require("./localAdmin");
+  console.log("✅ Modo local: inicializado con credenciales personalizadas.");
+} else {
+  admin = require("firebase-admin");
+  if (!admin.apps.length) {
+    admin.initializeApp();
+    console.log("🌐 Modo Cloud: inicializado con credenciales del entorno.");
+  }
 }
 
-exports.crearBackup = functions.https.onCall(async (data, context) => {
-  if (!context.auth)
-    throw new functions.https.HttpsError(
-      'unauthenticated',
-      'Debe iniciar sesión.'
-    );
-  if (!context.auth.token || context.auth.token.role !== 'admin')
-    throw new functions.https.HttpsError(
-      'permission-denied',
-      'Acceso denegado. Requiere rol admin.'
-    );
+const db = admin.firestore();
+const storage = new Storage();
+const BUCKET_NAME = "udecfit-firestore-backups";
 
+/**
+ * 🔹 CREAR BACKUP
+ */
+exports.crearBackup = functions.https.onRequest({ region: "us-central1" }, async (req, res) => {
   try {
-    const firestore = await getFirestoreClient();
-    const parent = `projects/${projectId}/databases/(default)`;
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const outputUriPrefix = `gs://${bucketName}/${timestamp}`;
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Método no permitido. Usa POST." });
+    }
 
-    // ✅ Aquí usamos la API de Firestore Admin directamente
-    const res = await firestore.projects.databases.exportDocuments({
-      name: parent,
-      requestBody: {
-        outputUriPrefix,
-        collectionIds: [], // si quieres exportar todo, déjalo vacío
-      },
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupFolder = `backups/${timestamp}`;
+    const bucket = storage.bucket(BUCKET_NAME);
+
+    console.log(`🗄️ Iniciando backup en: ${backupFolder}`);
+
+    const collections = await db.listCollections();
+    for (const collection of collections) {
+      const snapshot = await collection.get();
+      const docs = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        data: doc.data(),
+      }));
+
+      const file = bucket.file(`${backupFolder}/${collection.id}.json`);
+      await file.save(JSON.stringify(docs, null, 2));
+      console.log(`✅ Backup guardado: ${collection.id}.json`);
+    }
+
+    res.json({
+      message: "✅ Backup completado correctamente.",
+      folder: backupFolder,
     });
-
-    console.log('✅ Backup iniciado correctamente:', outputUriPrefix);
-    return {
-      message: 'Backup iniciado correctamente',
-      path: outputUriPrefix,
-      operation: res.data,
-    };
-  } catch (err) {
-    console.error('❌ Error al crear backup:', err);
-    throw new functions.https.HttpsError(
-      'internal',
-      'Error al crear el backup: ' + err.message
-    );
+  } catch (error) {
+    console.error("❌ Error creando el backup:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-exports.restaurarBackup = functions.https.onCall(async (data, context) => {
-  if (!context.auth)
-    throw new functions.https.HttpsError(
-      'unauthenticated',
-      'Debe iniciar sesión.'
-    );
-  if (!context.auth.token || context.auth.token.role !== 'admin')
-    throw new functions.https.HttpsError(
-      'permission-denied',
-      'Acceso denegado. Requiere rol admin.'
-    );
-
-  const inputUriPrefix = data?.path;
-  if (!inputUriPrefix)
-    throw new functions.https.HttpsError(
-      'invalid-argument',
-      'Se requiere path del backup (inputUriPrefix).'
-    );
-
+/**
+ * 🔹 RESTAURAR BACKUP
+ */
+exports.restaurarBackup = functions.https.onRequest({ region: "us-central1" }, async (req, res) => {
   try {
-    const firestore = await getFirestoreClient();
-    const parent = `projects/${projectId}/databases/(default)`;
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Método no permitido. Usa POST." });
+    }
 
-    const res = await firestore.projects.databases.importDocuments({
-      name: parent,
-      requestBody: {
-        inputUriPrefix,
-      },
-    });
+    const carpeta = req.body?.carpeta || req.query?.carpeta;
+    if (!carpeta) {
+      return res.status(400).json({ error: "Falta el parámetro 'carpeta' en body o query." });
+    }
 
-    console.log('✅ Restauración iniciada desde:', inputUriPrefix);
-    return {
-      message: 'Restauración iniciada correctamente',
-      path: inputUriPrefix,
-      operation: res.data,
-    };
-  } catch (err) {
-    console.error('❌ Error al restaurar:', err);
-    throw new functions.https.HttpsError(
-      'internal',
-      'Error al restaurar: ' + err.message
-    );
+    const bucket = storage.bucket(BUCKET_NAME);
+    const [files] = await bucket.getFiles({ prefix: `backups/${carpeta}/` });
+
+    if (files.length === 0) {
+      return res.status(404).json({ error: `No se encontraron archivos en backups/${carpeta}/` });
+    }
+
+    console.log(`♻️ Restaurando backup desde: ${carpeta}`);
+
+    for (const file of files) {
+      const [content] = await file.download();
+      const docs = JSON.parse(content.toString());
+      const collectionName = path.basename(file.name, ".json");
+
+      const batch = db.batch();
+      const colRef = db.collection(collectionName);
+
+      docs.forEach((doc) => {
+        const docRef = colRef.doc(doc.id);
+        batch.set(docRef, doc.data);
+      });
+
+      await batch.commit();
+      console.log(`✅ Restaurada colección: ${collectionName}`);
+    }
+
+    res.json({ message: `✅ Restauración completada correctamente.`, folder: carpeta });
+  } catch (error) {
+    console.error("❌ Error restaurando backup:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-exports.listarBackups = functions.https.onCall(async (data, context) => {
-  if (!context.auth)
-    throw new functions.https.HttpsError(
-      'unauthenticated',
-      'Debe iniciar sesión.'
-    );
-  if (!context.auth.token || context.auth.token.role !== 'admin')
-    throw new functions.https.HttpsError(
-      'permission-denied',
-      'Acceso denegado. Requiere rol admin.'
-    );
-
+/**
+ * 🔹 LISTAR BACKUPS
+ */
+exports.listarBackups = functions.https.onRequest({ region: "us-central1" }, async (req, res) => {
   try {
-    const [files] = await storage.bucket(bucketName).getFiles();
-    const folders = new Set();
-    files.forEach((f) => {
-      const parts = f.name.split('/');
-      if (parts.length) folders.add(parts[0]);
+    const bucket = storage.bucket(BUCKET_NAME);
+    const [files] = await bucket.getFiles({ prefix: "backups/" });
+
+    const folders = [...new Set(files.map((f) => f.name.split("/")[1]))].filter(Boolean);
+
+    res.json({
+      message: "✅ Lista de backups obtenida.",
+      backups: folders.sort().reverse(),
     });
-    return { backups: Array.from(folders).sort().reverse() };
-  } catch (err) {
-    console.error('❌ Error listando backups:', err);
-    throw new functions.https.HttpsError(
-      'internal',
-      'Error listando backups: ' + err.message
-    );
+  } catch (error) {
+    console.error("❌ Error listando backups:", error);
+    res.status(500).json({ error: error.message });
   }
 });
