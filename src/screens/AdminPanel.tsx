@@ -9,6 +9,7 @@ import {
   Alert,
   StyleSheet,
   ActivityIndicator,
+  Platform, // Importar Platform para el manejo de prompt
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -37,6 +38,8 @@ export default function AdminPanel({ navigation }: any) {
 
   // State para la gestión de copias de seguridad
   const [loading, setLoading] = useState(false);
+  // Estado para el mensaje de estado del backup/restore (Nueva adición)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   // --- Lógica de Máquinas (useEffect y Funciones) ---
 
@@ -94,108 +97,100 @@ export default function AdminPanel({ navigation }: any) {
     }
   };
 
-  // --- Lógica de Copias de Seguridad (Funciones) ---
+  // --- Lógica de Copias de Seguridad (Funciones MODIFICADAS) ---
 
-  // --- Backup (crear) ---
-const handleBackup = async () => {
-  Alert.alert(
-    "Confirmar Copia de Seguridad",
-    "¿Estás seguro de que deseas crear una copia de seguridad de la base de datos?",
-    [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Crear Copia",
-        onPress: async () => {
-          try {
-            setLoading(true);
+  const handleBackup = async () => {
+    setStatusMessage("⏳ Creando copia de seguridad...");
+    setLoading(true); // Opcional, mantener o quitar el loading. Aquí lo dejo por consistencia con el componente original.
+    try {
+      const response = await fetch("https://crearbackup-er54jbqu2q-uc.a.run.app", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
 
-            // token para autorizar si tu función lo requiere
-            const token = await auth.currentUser?.getIdToken();
+      const data = await response.json();
+      if (response.ok) {
+        setStatusMessage(`✅ ${data.message} — Carpeta: ${data.folder}`);
+      } else {
+        setStatusMessage(`❌ Error: ${data.error || "Error desconocido"}`);
+        // Mostrar alerta más detallada si es necesario
+        Alert.alert("Error en Backup", `Detalle: ${data.error || "Error desconocido"}`);
+      }
+    } catch (error: any) {
+      setStatusMessage(`⚠️ Error de conexión: ${error.message}`);
+      Alert.alert("Error de Conexión", `Detalle: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-            const response = await fetch(
-              "https://us-central1-udecfit-b6d1f.cloudfunctions.net/crearBackup",
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  const handleRestore = async () => {
+    // Para asegurar la compatibilidad con Android y iOS, usamos Alert.prompt o un modal personalizado.
+    // Usaremos Alert.prompt aquí (funciona nativamente en iOS, y puede requerir polyfill o librería en Android).
+    // Nota: El prompt de la modificación asume que se ejecuta donde `prompt` está disponible (como en web o con polyfill/librería).
+    
+    // Implementación usando Alert.prompt de React Native:
+    const folderPrompt = (callback: (text: string) => Promise<void>) => {
+        Alert.prompt(
+            "Restaurar copia",
+            "🗂️ Ingresa el nombre de la carpeta de backup (Ej: 2025-10-09T05-38-40_67699):",
+            [
+                { text: "Cancelar", style: "cancel" },
+                {
+                    text: "Restaurar",
+                    onPress: (folderName) => {
+                        if (folderName) {
+                            callback(folderName);
+                        } else {
+                            setStatusMessage("❗ Restauración cancelada o carpeta vacía.");
+                        }
+                    },
                 },
-                body: JSON.stringify({}), // enviar algo si tu función lo necesita
-              }
-            );
+            ],
+            Platform.OS === 'ios' ? "plain-text" : undefined // 'plain-text' solo en iOS
+        );
+    };
 
-            if (response.ok) {
-              const json = await response.json().catch(() => null);
-              Alert.alert("✅ Copia creada", `Backup iniciado.${json?.folder ? ` Carpeta: ${json.folder}` : ""}`);
-            } else {
-              const text = await response.text().catch(() => null);
-              Alert.alert("❌ Error", `No se pudo crear la copia. ${response.status} ${text ?? ""}`);
-            }
-          } catch (error) {
-            Alert.alert("⚠️ Error de conexión", (error as Error).message);
-          } finally {
-            setLoading(false);
-          }
-        },
-      },
-    ]
-  );
-};
+    folderPrompt(async (folderName) => {
+      const trimmedFolderName = folderName.trim();
+      if (trimmedFolderName === "") {
+        setStatusMessage("❗ Restauración cancelada o carpeta vacía.");
+        return;
+      }
 
-// --- Restore (restaurar) ---
-const handleRestore = async () => {
-  // Usamos Alert.prompt como antes — recuerda: Alert.prompt NO funciona en Android por defecto.
-  Alert.prompt(
-    "Restaurar copia",
-    "Introduce el nombre de la carpeta del backup que deseas restaurar (Ej: 2025-10-09T05-38-40_67699):",
-    [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Restaurar",
-        onPress: async (folderName) => {
-          if (!folderName || folderName.trim() === "") {
-            Alert.alert("Aviso", "Debes ingresar el nombre de la carpeta.");
-            return;
-          }
-          try {
-            setLoading(true);
+      setStatusMessage(`♻️ Restaurando desde: ${trimmedFolderName}...`);
+      setLoading(true);
 
-            // token para autorizar la petición si tu función lo requiere
-            const token = await auth.currentUser?.getIdToken();
-
-            // Si tu función acepta query param:
-            // const url = `https://us-central1-udecfit-b6d1f.cloudfunctions.net/restaurarBackup?carpeta=${encodeURIComponent(folderName.trim())}`;
-
-            // Recomiendo enviar por POST en body (más claro, y evita problemas de longitud/encoding)
-            const url = `https://us-central1-udecfit-b6d1f.cloudfunctions.net/restaurarBackup`;
-
-            const response = await fetch(url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              },
-              body: JSON.stringify({ carpeta: folderName.trim() }),
-            });
-
-            if (response.ok) {
-              const json = await response.json().catch(() => null);
-              Alert.alert("✅ Restauración iniciada", `${json?.message ?? "Se inició la restauración."}`);
-            } else {
-              const text = await response.text().catch(() => null);
-              Alert.alert("❌ Error", `No se pudo restaurar el backup. ${response.status} ${text ?? ""}`);
-            }
-          } catch (error) {
-            Alert.alert("⚠️ Error de conexión", (error as Error).message);
-          } finally {
-            setLoading(false);
-          }
-        },
-      },
-    ],
-    "plain-text"
-  );
-};
+      try {
+        // La URL con el query param de la modificación
+        const response = await fetch(
+          `https://restaurarbackup-er54jbqu2q-uc.a.run.app?carpeta=${encodeURIComponent(trimmedFolderName)}`,
+          { method: "POST" }
+        );
+        
+        const text = await response.text();
+        let data;
+        try {
+            data = JSON.parse(text); // Intentar parsear como JSON
+        } catch (e) {
+            data = { error: `Respuesta no JSON: ${text.substring(0, 50)}...` }; // Manejar respuesta no JSON
+        }
+        
+        if (response.ok) {
+          setStatusMessage(`✅ ${data.message || "Restauración iniciada."}`);
+        } else {
+          setStatusMessage(`❌ Error: ${data.error || "Error desconocido"}`);
+          Alert.alert("Error en Restore", `Detalle: ${data.error || "Error desconocido"} (Status: ${response.status})`);
+        }
+      } catch (error: any) {
+        setStatusMessage(`⚠️ Error de conexión: ${error.message}`);
+        Alert.alert("Error de Conexión", `Detalle: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    });
+  };
 
   // --- Renderizado ---
 
@@ -259,6 +254,14 @@ const handleRestore = async () => {
             </TouchableOpacity>
           </View>
         )}
+        
+        {/* Renderizado del mensaje de estado (ADICIÓN) */}
+        {statusMessage && (
+          <Text style={{ marginTop: 15, color: "#333", textAlign: "center" }}>
+            {statusMessage}
+          </Text>
+        )}
+        
       </View>
 
       <View style={styles.separator} />
