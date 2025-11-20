@@ -1,396 +1,382 @@
-import React, { useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  FlatList,
-  Alert,
-  Platform,
+import React, { useState } from 'react';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  FlatList, 
+  TouchableOpacity, 
+  Alert, 
+  Platform,
+  ScrollView,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { 
+  doc, 
+  updateDoc, 
+  arrayUnion, 
+} from 'firebase/firestore';
+import { auth, db } from '../firebase/config';
 
-/**
- * RutinaScreen (modo oscuro)
- * - Permite elegir tipo de rutina (Fullbody, Torso-Pierna, PPL)
- * - Elegir número de días (3..6)
- * - Genera rutina en memoria usando ejercicios base (tomados del mismo dataset)
- * - Muestra vista previa por día y botones simples (iniciar/reiniciar)
- */
+// 🛠️ Importación de UUID (limpia y funcional)
+import { v4 as uuidv4 } from 'uuid';
 
-type EjercicioMin = {
-  id: string;
-  nombre: string;
-  grupo: string;
-  maquina?: string;
-};
+// Importamos los datos de la fusión (ESQUEMAS_DATOS, Esquema)
+import { 
+    ESQUEMAS_DATOS, 
+    Esquema, 
+} from '../data/rutinaDatos'; 
 
-const EJERCICIOS_BASE: EjercicioMin[] = [
-  { id: '1', nombre: 'Press de Pecho en Máquina', grupo: 'Pecho', maquina: 'Press' },
-  { id: '2', nombre: 'Remo Sentado', grupo: 'Espalda', maquina: 'Remo' },
-  { id: '3', nombre: 'Sentadilla Smith', grupo: 'Piernas', maquina: 'Smith' },
-  { id: '4', nombre: 'Peso Muerto Rumano', grupo: 'Piernas', maquina: 'Barra' },
-  { id: '5', nombre: 'Press Militar', grupo: 'Hombros', maquina: 'Mancuernas' },
-  { id: '6', nombre: 'Curl Bíceps', grupo: 'Brazos', maquina: 'Mancuernas' },
-  { id: '7', nombre: 'Extensión de Piernas', grupo: 'Piernas', maquina: 'Extensión' },
-  { id: '8', nombre: 'Polea al Pecho', grupo: 'Espalda', maquina: 'Polea' },
-  { id: '9', nombre: 'Fondos Asistidos', grupo: 'Pecho', maquina: 'Asistida' },
-  { id: '10', nombre: 'Plancha', grupo: 'Core', maquina: 'Ninguna' },
-];
-
-type RutinaGenerada = {
-  [dia: string]: EjercicioMin[];
-};
-
-const TIPOS = ['Fullbody', 'Torso-Pierna', 'PPL'] as const;
-type TipoRutina = typeof TIPOS[number];
-
-export default function RutinaScreen() {
-  const [tipo, setTipo] = useState<TipoRutina>('Fullbody');
-  const [dias, setDias] = useState<number>(4);
-  const [rutina, setRutina] = useState<RutinaGenerada | null>(null);
-  const [iniciada, setIniciada] = useState(false);
-
-  // Generador simple: selecciona ejercicios evitando repetir el mismo ejercicio en un día.
-  const generarRutina = () => {
-    // reglas básicas según tipo
-    const diasCount = Math.max(3, Math.min(6, dias));
-    const available = EJERCICIOS_BASE.slice();
-
-    // función auxiliar: escoger n ejercicios distintos priorizando grupos
-    const pickExercisesForDay = (preferredGroups: string[], count = 4) => {
-      const picked: EjercicioMin[] = [];
-      const pool = available.slice();
-      // 1) intentar cubrir preferred groups
-      preferredGroups.forEach((g) => {
-        const idx = pool.findIndex((p) => p.grupo === g);
-        if (idx >= 0) {
-          picked.push(pool.splice(idx, 1)[0]);
-        }
-      });
-      // 2) completar con aleatorios evitando duplicados
-      while (picked.length < count && pool.length > 0) {
-        const idx = Math.floor(Math.random() * pool.length);
-        picked.push(pool.splice(idx, 1)[0]);
-      }
-      return picked;
-    };
-
-    const generated: RutinaGenerada = {};
-    for (let d = 1; d <= diasCount; d++) {
-      let preferred: string[] = [];
-      if (tipo === 'Fullbody') {
-        preferred = ['Pecho', 'Espalda', 'Piernas', 'Core'];
-      } else if (tipo === 'Torso-Pierna') {
-        preferred = d % 2 === 1 ? ['Pecho', 'Espalda', 'Brazos'] : ['Piernas', 'Core'];
-      } else if (tipo === 'PPL') {
-        const mod = ((d - 1) % 3);
-        preferred = mod === 0 ? ['Pecho', 'Hombros', 'Tríceps'] : mod === 1 ? ['Espalda', 'Bíceps'] : ['Piernas', 'Core'];
-      }
-      const dayKey = `Día ${d}`;
-      generated[dayKey] = pickExercisesForDay(preferred, 4);
-    }
-
-    setRutina(generated);
-    setIniciada(false);
-  };
-
-  const reiniciar = () => {
-    setRutina(null);
-    setIniciada(false);
-  };
-
-  const iniciarRutina = () => {
-    if (!rutina) {
-      Alert.alert('Genera la rutina', 'Primero genera la rutina para poder iniciarla.');
-      return;
-    }
-    setIniciada(true);
-    Alert.alert('Rutina iniciada', 'La rutina ha sido iniciada (simulación, en memoria).');
-  };
-
-  const renderDay = (day: string, index: number) => {
-    const ejercicios = rutina ? rutina[day] || [] : [];
-    return (
-      <View key={day} style={styles.dayCard}>
-        <Text style={styles.dayTitle}>{day}</Text>
-        <FlatList
-          data={ejercicios}
-          keyExtractor={(e) => e.id}
-          renderItem={({ item, index: idx }) => (
-            <View style={styles.execRow}>
-              <Text style={styles.execIndex}>{idx + 1}.</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.execName}>{item.nombre}</Text>
-                <Text style={styles.execMeta}>{item.grupo} • {item.maquina}</Text>
-              </View>
-              <TouchableOpacity style={styles.smallBtn}>
-                <Ionicons name="play" size={18} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          )}
-        />
-      </View>
-    );
-  };
-
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.header}>Generador de Rutinas</Text>
-
-      <View style={styles.section}>
-        <Text style={styles.label}>Tipo de rutina</Text>
-        <View style={styles.row}>
-          {TIPOS.map((t) => {
-            const active = t === tipo;
-            return (
-              <TouchableOpacity
-                key={t}
-                style={[styles.typeBtn, active && styles.typeBtnActive]}
-                onPress={() => setTipo(t)}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.typeBtnText, active && styles.typeBtnTextActive]}>{t}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.label}>Días por semana</Text>
-        <View style={styles.row}>
-          {[3, 4, 5, 6].map((n) => (
-            <TouchableOpacity
-              key={n}
-              style={[styles.dayBtn, dias === n && styles.dayBtnActive]}
-              onPress={() => setDias(n)}
-            >
-              <Text style={[styles.dayBtnText, dias === n && styles.dayBtnTextActive]}>{n}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      <View style={styles.actionsRow}>
-        <TouchableOpacity style={styles.genBtn} onPress={generarRutina}>
-          <Ionicons name="shuffle" size={18} color="#fff" />
-          <Text style={styles.genBtnText}>Generar Rutina</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.clearBtn} onPress={reiniciar}>
-          <Ionicons name="trash" size={18} color="#fff" />
-          <Text style={styles.clearBtnText}>Reiniciar</Text>
-        </TouchableOpacity>
-      </View>
-
-      {rutina ? (
-        <>
-          <View style={styles.previewHeader}>
-            <Text style={styles.previewTitle}>Vista previa</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <TouchableOpacity style={styles.smallAction} onPress={iniciarRutina}>
-                <Ionicons name="play" size={16} color="#fff" />
-                <Text style={styles.smallActionText}>Iniciar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.smallAction, { marginLeft: 8 }]} onPress={() => { setIniciada(false); Alert.alert('Pausado', 'La rutina ha sido pausada (simulado).'); }}>
-                <Ionicons name="pause" size={16} color="#fff" />
-                <Text style={styles.smallActionText}>Pausar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={{ width: '100%', paddingHorizontal: 12 }}>
-            {Object.keys(rutina).map((day, idx) => renderDay(day, idx))}
-          </View>
-        </>
-      ) : (
-        <View style={styles.hintBox}>
-          <Text style={styles.hintText}>Genera una rutina para ver la vista previa por días.</Text>
-        </View>
-      )}
-
-      <View style={{ height: 40 }} />
-    </ScrollView>
-  );
+// --- TIPOS DE DATOS ---
+interface Ejercicio {
+  nombre: string;
+  series: number;
+  repeticiones: string; 
+  completado: boolean;
+  id: string;
 }
 
+type Rutina = {
+  id: string;
+  nombre: string;
+  dias: number;
+  esquemaId: keyof typeof ESQUEMAS_DATOS;
+  esquema: Esquema[];
+  detalle: { dia: string; rutina: string[] }[];
+};
+
+const OPCIONES_DIAS = [3, 4, 5, 6]; 
+
+export default function RutinaScreen() {
+    // ESTADOS
+    const [rutinasCreadas, setRutinasCreadas] = useState<Rutina[]>([]);
+    const [modalVisible, setModalVisible] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [rutinaSeleccionada, setRutinaSeleccionada] = useState<Rutina | null>(null);
+
+    // --- FUNCIONES DE GENERACIÓN DE RUTINA ---
+    const seleccionDias = (dias: number) => {
+        let esquemaRutina: Esquema[] = [];
+        let nombreRutina: string = "";
+        let esquemaId: keyof typeof ESQUEMAS_DATOS;
+
+        let detalleRutina: { dia: string; rutina: string[] }[] = [
+            { dia: "Lunes", rutina: [] },
+            { dia: "Martes", rutina: [] },
+            { dia: "Miércoles", rutina: [] },
+            { dia: "Jueves", rutina: [] },
+            { dia: "Viernes", rutina: [] },
+            { dia: "Sábado", rutina: [] },
+        ];
+        
+        switch (dias) {
+            case 3:
+                esquemaId = "fullBody";
+                nombreRutina = "FULLBODY";
+                esquemaRutina = ESQUEMAS_DATOS.fullBody;
+                break;
+            case 4:
+                esquemaId = "torsoPierna";
+                nombreRutina = "TORSO-PIERNA";
+                esquemaRutina = ESQUEMAS_DATOS.torsoPierna;
+                break;
+            case 5:
+                esquemaId = "torsoPierna_ppl";
+                nombreRutina = "TORSO-PIERNA/PPL";
+                esquemaRutina = ESQUEMAS_DATOS.torsoPierna_ppl;
+                break;
+            case 6:
+                esquemaId = "ppl";
+                nombreRutina = "PPL";
+                esquemaRutina = ESQUEMAS_DATOS.ppl;
+                break;
+            default:
+                setModalVisible(false);
+                return;
+        }
+
+        esquemaRutina.forEach((esq, index) => {
+            if (detalleRutina[index]) {
+                detalleRutina[index].rutina = esq.rutina;
+            }
+        });
+
+        const nuevaRutina: Rutina = {
+            id: uuidv4(),
+            nombre: nombreRutina,
+            dias: dias,
+            esquemaId: esquemaId,
+            esquema: esquemaRutina,
+            detalle: detalleRutina.slice(0, dias),
+        };
+
+        setRutinasCreadas((prevRutinas) => [...prevRutinas, nuevaRutina]);
+        setModalVisible(false);
+    };
+
+    const verDetalle = (rutina: Rutina) => {
+        setRutinaSeleccionada(rutina);
+    };
+
+    const cerrarDetalle = () => {
+        setRutinaSeleccionada(null);
+    };
+
+    // --- Lógica de Completar Sesión ---
+    const guardarSesionCompletada = async (rutina: Rutina) => {
+        const user = auth.currentUser;
+        if (!user || isLoading) return;
+        
+        setIsLoading(true);
+        const userId = user.uid;
+        const sessionDate = new Date().toISOString().split('T')[0];
+
+        try {
+            const userDocRef = doc(db, 'users', userId);
+            
+            await updateDoc(userDocRef, {
+                sesionesCompletadas: arrayUnion({ id: rutina.id, nombre: rutina.nombre, fecha: sessionDate })
+            });
+
+            Alert.alert("¡Felicidades!", `Has completado la rutina ${rutina.nombre}. ¡Sigue así!`);
+            setRutinasCreadas(prev => prev.filter(r => r.id !== rutina.id));
+            setRutinaSeleccionada(null);
+        } catch (error: any) {
+            Alert.alert("Error al guardar", "No se pudo registrar la sesión completada.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+
+    // --- RENDERIZADO DEL DETALLE (CONDICIONAL) ---
+
+    if (rutinaSeleccionada) {
+        return (
+            <DetalleRutinaView 
+                rutina={rutinaSeleccionada} 
+                onClose={cerrarDetalle} 
+                onComplete={guardarSesionCompletada}
+                isLoading={isLoading}
+            />
+        );
+    }
+
+
+    // --- RENDERIZADO DE LA LISTA PRINCIPAL (DEFAULT) ---
+    return (
+        <>
+            <ScrollView 
+                style={styles.scroll}
+                contentContainerStyle={rutinasCreadas.length === 0 ? styles.scrollVacio : styles.scrollContent}
+            >
+                {/* CABECERA PERSONALIZADA */}
+                <View style={styles.customHeader}>
+                    <Text style={styles.headerTitle}>Mis Rutinas</Text>
+                </View>
+                
+                <View style={{ flex: 1, paddingHorizontal: 20 }}>
+                    {rutinasCreadas.length > 0 ? (
+                        // Muestra las rutinas creadas
+                        rutinasCreadas.map((rutina) => (
+                            <View style={styles.cardContainer} key={rutina.id}>
+                                <TouchableOpacity
+                                    style={styles.card}
+                                    onPress={() => verDetalle(rutina)}
+                                >
+                                    <View style={styles.cardInfo}>
+                                        <Text style={styles.cardTitle}>{rutina.nombre}</Text>
+                                        <Text style={styles.cardText}>{rutina.dias} días de entreno</Text>
+                                        <Text style={styles.cardMeta}>{rutina.esquemaId.toUpperCase()}</Text>
+                                    </View>
+                                </TouchableOpacity>
+                            </View>
+                        ))
+                    ) : (
+                        // Mensaje cuando no hay rutinas
+                        <View style={styles.containerVacio}>
+                            <Text style={styles.textoContainerVacio}>
+                                Toca el botón '+' para generar tu primera rutina.
+                            </Text>
+                        </View>
+                    )}
+                </View>
+            </ScrollView>
+
+            {/* Botón Flotante para Agregar Rutina */}
+            <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
+                <Ionicons name="add-circle-sharp" size={70} color="#7B61FF" />
+            </TouchableOpacity>
+
+            {/* MODAL DE SELECCIÓN DE DÍAS */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={modalVisible}
+                onRequestClose={() => setModalVisible(false)}
+            >
+                <View style={styles.modalContainer}>
+                    <View style={styles.modalView}>
+                        <Text style={styles.modalTitle}>
+                            ¿Cuántos días a la semana quieres entrenar?
+                        </Text>
+                        {OPCIONES_DIAS.map((dias) => (
+                            <TouchableOpacity
+                                style={styles.modalButtons}
+                                key={dias}
+                                onPress={() => seleccionDias(dias)}
+                            >
+                                <Text style={styles.modalButtonText}>{dias} días</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </View>
+            </Modal>
+        </>
+    );
+}
+
+// --- SUBCOMPONENTE DE DETALLE DE LA RUTINA (VISUALIZACIÓN) ---
+const DetalleRutinaView = ({ rutina, onClose, onComplete, isLoading }: { rutina: Rutina, onClose: () => void, onComplete: (r: Rutina) => void, isLoading: boolean }) => {
+    return (
+        <View style={detalleStyles.fullContainer}>
+            {/* CABECERA DE DETALLE (Con botón de retroceso) */}
+            <View style={detalleStyles.customHeader}>
+                <TouchableOpacity onPress={onClose} style={detalleStyles.backButton}>
+                    <Ionicons name="arrow-back" size={24} color="#fff" />
+                </TouchableOpacity>
+                <Text style={detalleStyles.headerTitle}>Detalle de Rutina</Text>
+            </View>
+
+            <ScrollView contentContainerStyle={detalleStyles.container}>
+                <View style={detalleStyles.infoBox}>
+                    <Text style={detalleStyles.title}>{rutina.nombre} ({rutina.dias} Días)</Text>
+                    <Text style={detalleStyles.subtitle}>ID: {rutina.id.substring(0, 8)}... </Text>
+                    <Text style={detalleStyles.subtitle}>{rutina.dias} Días de Entrenamiento</Text>
+                </View>
+
+                <Text style={detalleStyles.sectionTitle}>Esquema de la Semana</Text>
+                
+                {rutina.detalle.map((diaDetalle, index) => (
+                    <View key={index} style={detalleStyles.dayCard}>
+                        <Text style={detalleStyles.dayTitle}>{diaDetalle.dia.toUpperCase()}</Text>
+                        <Text style={detalleStyles.dayMeta}>
+                            ({rutina.esquemaId.toUpperCase()})
+                        </Text>
+
+                        {diaDetalle.rutina.map((ejercicio, ejIndex) => (
+                            <Text key={ejIndex} style={detalleStyles.ejercicioItem}>
+                                • {ejercicio}
+                            </Text>
+                        ))}
+                    </View>
+                ))}
+
+                <TouchableOpacity 
+                    style={detalleStyles.completeButton}
+                    onPress={() => onComplete(rutina)}
+                    disabled={isLoading}
+                >
+                    <Ionicons name="trophy-outline" size={20} color="#000" />
+                    <Text style={detalleStyles.completeButtonText}>
+                        {isLoading ? 'Guardando Progreso...' : 'FINALIZAR RUTINA'}
+                    </Text>
+                </TouchableOpacity>
+            </ScrollView>
+        </View>
+    );
+};
+
+
+// --- ESTILOS (Adaptados para la versión final) ---
 const styles = StyleSheet.create({
-  container: {
-    paddingTop: Platform.OS === 'ios' ? 50 : 20,
-    paddingBottom: 40,
-    paddingHorizontal: 12,
-    backgroundColor: '#111',
-    alignItems: 'center',
-  },
-  header: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '800',
-    marginBottom: 12,
-  },
-  section: {
-    width: '100%',
-    marginBottom: 12,
-  },
-  label: {
-    color: '#bdbdbd',
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  row: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  typeBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: '#0f0f0f',
-    marginRight: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#1a1a1a',
-  },
-  typeBtnActive: {
-    backgroundColor: '#17230f',
-    borderColor: '#7AC637',
-  },
-  typeBtnText: {
-    color: '#cfcfcf',
-    fontWeight: '700',
-  },
-  typeBtnTextActive: {
-    color: '#7AC637',
-  },
-  dayBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: '#0f0f0f',
-    marginRight: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#1a1a1a',
-  },
-  dayBtnActive: {
-    borderColor: '#7AC637',
-    backgroundColor: '#17230f',
-  },
-  dayBtnText: {
-    color: '#cfcfcf',
-    fontWeight: '700',
-  },
-  dayBtnTextActive: {
-    color: '#7AC637',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    width: '100%',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  genBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#7AC637',
-    padding: 12,
-    borderRadius: 12,
-    flex: 1,
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  genBtnText: {
-    color: '#012200',
-    fontWeight: '800',
-    marginLeft: 8,
-  },
-  clearBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#7B61FF',
-    padding: 12,
-    borderRadius: 12,
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-  },
-  clearBtnText: {
-    color: '#fff',
-    fontWeight: '700',
-    marginLeft: 8,
-  },
-  previewHeader: {
-    width: '100%',
-    marginTop: 16,
-    marginBottom: 8,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  previewTitle: {
-    color: '#fff',
-    fontWeight: '800',
-  },
-  dayCard: {
-    backgroundColor: '#0f0f0f',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#1a1a1a',
-  },
-  dayTitle: {
-    color: '#cfcfcf',
-    fontWeight: '800',
-    marginBottom: 8,
-  },
-  execRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  execIndex: {
-    width: 22,
-    color: '#9a9a9a',
-    marginRight: 8,
-  },
-  execName: {
-    color: '#fff',
-    fontWeight: '700',
-  },
-  execMeta: {
-    color: '#9a9a9a',
-    fontSize: 12,
-  },
-  smallBtn: {
-    backgroundColor: '#7B61FF',
-    padding: 8,
-    borderRadius: 8,
-    marginLeft: 8,
-  },
-  smallAction: {
-    backgroundColor: '#7B61FF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  smallActionText: {
-    color: '#fff',
-    marginLeft: 6,
-    fontWeight: '700',
-  },
-  hintBox: {
-    marginTop: 24,
-    padding: 18,
-    backgroundColor: '#0f0f0f',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#1a1a1a',
-  },
-  hintText: {
-    color: '#9a9a9a',
-  },
+    fullContainer: { flex: 1, backgroundColor: '#1C1C1C' }, 
+    customHeader: {
+        paddingTop: Platform.OS === 'ios' ? 50 : 20,
+        paddingHorizontal: 24,
+        paddingBottom: 15,
+        backgroundColor: '#222',
+        borderBottomColor: '#333',
+        borderBottomWidth: 1,
+        marginBottom: 10,
+    },
+    headerTitle: {
+        fontSize: 22,
+        fontWeight: 'bold',
+        color: '#fff',
+        textAlign: 'center',
+    },
+    
+    // Estilos del Scroll/Contenido
+    scroll: { flex: 1, backgroundColor: "#1C1C1C", },
+    scrollContent: { paddingTop: 10, paddingBottom: 100, },
+    scrollVacio: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#1C1C1C", paddingTop: 200, },
+    
+    // Contenedores
+    cardContainer: {
+        backgroundColor: "#2C2C2C",
+        marginVertical: 10,
+        borderRadius: 15,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: '#333',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 5,
+        elevation: 8,
+    },
+    card: {
+        padding: 20,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    cardInfo: { flex: 1, },
+    cardMeta: { fontSize: 14, fontWeight: '600', color: '#7AC637', marginTop: 5, },
+    cardTitle: { fontSize: 22, fontWeight: "700", color: "#FFFFFF", marginBottom: 5, },
+    cardText: { fontSize: 16, fontWeight: "500", color: "#A9A9A9", },
+    
+    // Botón Flotante
+    addButton: {
+        position: "absolute",
+        bottom: 85, 
+        right: 20,
+        alignItems: "center",
+        justifyContent: "center",
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.4,
+        shadowRadius: 8,
+        elevation: 12,
+    },
+    
+    // Estilos del Modal
+    modalContainer: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0, 0, 0, 0.8)", },
+    modalView: { backgroundColor: "#1C1C1C", borderRadius: 20, padding: 25, width: "80%", alignItems: "center", borderWidth: 1, borderColor: '#333', },
+    modalTitle: { marginBottom: 20, fontSize: 18, fontWeight: "bold", textAlign: "center", color: "#FFFFFF", },
+    modalButtons: { backgroundColor: "#2C2C2C", width: "100%", padding: 15, borderRadius: 10, marginVertical: 8, alignItems: "center", borderWidth: 1, borderColor: '#7B61FF', },
+    modalButtonText: { color: '#FFFFFF', fontWeight: '600' },
+    containerVacio: { alignItems: "center", justifyContent: "center", padding: 20, },
+    textoContainerVacio: { color: "#A9A9A9", fontSize: 18, },
+});
+
+const detalleStyles = StyleSheet.create({
+    fullContainer: { flex: 1, backgroundColor: '#1C1C1C' },
+    customHeader: {
+        flexDirection: 'row', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 50 : 20, paddingBottom: 15, paddingHorizontal: 20, backgroundColor: '#222', borderBottomWidth: 1, borderColor: '#333',
+    },
+    backButton: { marginRight: 15, padding: 5, },
+    headerTitle: { fontSize: 22, fontWeight: 'bold', color: '#fff', },
+    container: { paddingHorizontal: 20, paddingVertical: 20, },
+    infoBox: { marginBottom: 30, padding: 15, backgroundColor: '#2C2C2C', borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#7AC637', },
+    title: { fontSize: 24, fontWeight: 'bold', color: '#FFFFFF', marginBottom: 5, },
+    subtitle: { fontSize: 16, color: '#A9A9A9', },
+    sectionTitle: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF', marginTop: 10, marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#333', paddingBottom: 5, },
+    dayCard: { backgroundColor: '#2C2C2C', padding: 15, borderRadius: 12, marginBottom: 15, borderLeftWidth: 4, borderLeftColor: '#7B61FF', },
+    dayTitle: { fontSize: 18, fontWeight: 'bold', color: '#FFFFFF', },
+    dayMeta: { fontSize: 12, color: '#A9A9A9', marginBottom: 10, },
+    ejercicioItem: { fontSize: 16, color: '#FFFFFF', marginBottom: 5, marginLeft: 10, borderLeftWidth: 2, borderLeftColor: '#444', paddingLeft: 8, },
+    completeButton: { backgroundColor: '#7AC637', padding: 18, borderRadius: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 30, marginBottom: 50, },
+    completeButtonText: { color: '#111111', fontWeight: '800', marginLeft: 10, fontSize: 16, }
 });

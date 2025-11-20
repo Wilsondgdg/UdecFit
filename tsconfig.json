@@ -11,18 +11,28 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "strict": false,
-    "moduleResolution": "node",
+    // MODIFICACIÓN: Usaremos la resolución moderna 'bundler' o 'node16' 
+    // pero 'node' suele ser el más seguro para Expo cuando hay conflictos.
+    "moduleResolution": "node", 
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    // MODIFICACIÓN: Usar los tipos correctos para el entorno RN
     "types": [
       "jest",
-      "node"
+      "react-native" // Aseguramos que los tipos de RN se incluyan
+    ],
+    "typeRoots": [
+      "./node_modules/@types",
+      "./types" // Si tienes tipos personalizados
     ]
   },
   "include": [
     "src",
-    "__tests__"
+    "__tests__",
+    "App.tsx", // Aseguramos que App.tsx sea incluido
+    "**/*.ts",
+    "**/*.tsx"
   ],
   "exclude": [
     "node_modules"
